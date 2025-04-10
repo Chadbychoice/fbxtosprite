@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FBX to Sprite Sheet</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 2em;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 600px;
+            margin: auto;
+            padding: 2em;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        input[type="file"] {
+            margin-bottom: 1em;
+        }
+        input[type="submit"] {
+            padding: 0.5em 1em;
+            cursor: pointer;
+        }
+        .form-group {
+            margin-bottom: 1em;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.3em;
+        }
+        input[type="number"], input[type="file"] {
+            width: 95%; /* More consistent width */
+            padding: 0.4em;
+            margin-bottom: 0.5em;
+        }
+        input[type="range"] {
+            width: 80%;
+        }
+        output {
+            display: inline-block;
+            margin-left: 10px;
+            font-weight: bold;
+        }
+        .angle-options {
+            margin-top: 1em;
+            margin-bottom: 1em;
+            border: 1px solid #eee;
+            padding: 1em;
+        }
+        .angle-options legend {
+            font-weight: bold;
+        }
+        .angle-options label {
+            display: inline-block; /* Align checkboxes */
+            margin-right: 1em;
+            font-weight: normal;
+        }
+        .custom-angle-group label {
+            display: block; /* Put custom angle label on its own line */
+            margin-top: 0.5em;
+            margin-bottom: 0.3em;
+        }
+        #custom_angle_value {
+             width: 80px; /* Smaller width for custom input */
+             display: inline-block;
+             margin-left: 5px;
+        }
+        #preview-area {
+            margin-top: 1.5em;
+            min-height: 200px; /* Placeholder size */
+            border: 1px dashed #ccc;
+            text-align: center;
+            line-height: 200px; /* Vertical align text */
+            color: #888;
+        }
+        #preview-area img {
+            max-width: 100%;
+            max-height: 300px; /* Limit preview size */
+            border: 1px solid #eee;
+            line-height: normal;
+            cursor: pointer; /* Indicate it's clickable */
+            transition: transform 0.2s ease-in-out; /* Smooth zoom */
+        }
+        #preview-area img.zoomed {
+            max-width: none; /* Allow larger size */
+            max-height: none;
+            transform: scale(2); /* Zoom factor - adjust as needed */
+            /* Optional: Add positioning adjustments if needed */
+            position: relative; 
+            z-index: 10;
+        }
+        .button-group button {
+             margin-right: 10px;
+             padding: 0.5em 1em;
+             cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>FBX Animation to PNG Sprite Sheet Converter</h1>
+        <p>Upload an FBX file, choose options, generate a preview, then process.</p>
+        
+        <form id="upload-form" method="post" enctype="multipart/form-data" action="{{ url_for('upload_file') }}">
+            
+            <div class="form-group">
+                <label for="file">1. Select FBX file:</label>
+                <input type="file" name="file" id="file" accept=".fbx" required>
+            </div>
+
+            <div class="form-group">
+                <label for="num_frames">2. Number of Frames (per angle):</label>
+                <input type="number" name="num_frames" id="num_frames" value="16" min="1" max="100" required>
+            </div>
+
+            <div class="form-group">
+                <label for="render_style">3. Render Style:</label>
+                <select name="render_style" id="render_style">
+                    <option value="bright" selected>Default (Bright)</option>
+                    <option value="cel">Cel Shaded</option>
+                    <option value="unlit">Unlit (Flat - Cartoonish)</option>
+                    <option value="original_unlit">Original Material (Unlit)</option>
+                    <option value="clay">Clay Render</option>
+                    <option value="wireframe">Wireframe</option>
+                    <option value="pixel_cel">Pixelated Cel</option>
+                </select>
+            </div>
+
+            <!-- Add Auto-Angles Checkbox -->
+            <div class="form-group">
+                 <label style="display: inline-block; margin-right: 10px;">
+                    <input type="checkbox" name="auto_angles" id="auto_angles_checkbox" value="true">
+                    Render 8 Angles (for Stationary Models)
+                 </label>
+                 <span style="font-size: 0.9em; color: #666;">(Disables angle/frame count selection)</span>
+            </div>
+
+            <!-- Add Pixelation Resolution Input -->
+            <div class="form-group" id="pixel-resolution-group" style="display: none;">
+                 <label for="pixel_resolution">Pixel Block Size (e.g., 128 = 128x128 blocks):</label>
+                 <input type="number" name="pixel_resolution" id="pixel_resolution" value="128" min="16" max="256" step="1">
+            </div>
+
+            <fieldset class="angle-options">
+                 <legend>4. Select Viewing Angles:</legend>
+                 <label><input type="checkbox" name="angles" value="0" checked> 0°</label>
+                 <label><input type="checkbox" name="angles" value="45"> 45°</label>
+                 <label><input type="checkbox" name="angles" value="90"> 90°</label>
+                 <label><input type="checkbox" name="angles" value="135"> 135°</label>
+                 <label><input type="checkbox" name="angles" value="180"> 180°</label>
+                 <label><input type="checkbox" name="angles" value="225"> 225°</label>
+                 <label><input type="checkbox" name="angles" value="270"> 270°</label>
+                 <label><input type="checkbox" name="angles" value="315"> 315°</label>
+                 
+                 <div class="custom-angle-group">
+                    <label for="custom_angle_value">
+                         <input type="checkbox" name="custom_angle_enabled" value="true"> Custom Angle:
+                    </label>
+                    <input type="number" name="custom_angle_value" id="custom_angle_value" min="0" max="360" step="any" placeholder="e.g., 22.5">
+                 </div>
+            </fieldset>
+
+            <!-- Preview Area -->
+            <div id="preview-area">
+                 Preview will appear here
+            </div>
+
+            <div class="button-group">
+                <button type="button" id="preview-button">Generate Preview</button>
+                <button type="submit" id="process-button">Process Full Animation</button> 
+            </div>
+            
+        </form>
+        <p id="status-message" style="margin-top: 1em;"></p> <!-- For showing messages -->
+    </div>
+
+    <script>
+        let uploadedFileId = null; // Variable to store the ID after upload
+
+        // --- Handle Initial Upload (for storing the file) ---
+        // We modify the form submission slightly - maybe better to do via JS fetch?
+        // For now, let's assume step 1 is uploading, then preview/process
+        // This part needs rework - the current form submits directly to /upload
+        // We need to split: 1. Upload, 2. Preview, 3. Process
+
+        const renderStyleSelect = document.getElementById('render_style');
+        const pixelGroup = document.getElementById('pixel-resolution-group');
+        const autoAnglesCheckbox = document.getElementById('auto_angles_checkbox');
+        const angleOptions = document.querySelector('.angle-options');
+        const numFramesInput = document.getElementById('num_frames');
+
+        // Show/hide pixel resolution input based on style selection
+        renderStyleSelect.addEventListener('change', function() {
+            if (this.value === 'pixel_cel') {
+                pixelGroup.style.display = 'block';
+            } else {
+                pixelGroup.style.display = 'none';
+            }
+        });
+        // Initial check in case the page loads with it selected (unlikely but safe)
+        if (renderStyleSelect.value === 'pixel_cel') {
+             pixelGroup.style.display = 'block';
+        }
+
+        // Enable/disable angle/frame inputs based on auto-angles checkbox
+        autoAnglesCheckbox.addEventListener('change', function() {
+            const disableInputs = this.checked;
+            // Disable angle fieldset contents
+            const angleInputs = angleOptions.querySelectorAll('input');
+            angleInputs.forEach(input => input.disabled = disableInputs);
+            // Disable number of frames input
+            numFramesInput.disabled = disableInputs;
+            // Optional: Visual cue
+            angleOptions.style.opacity = disableInputs ? 0.5 : 1.0;
+            numFramesInput.parentElement.style.opacity = disableInputs ? 0.5 : 1.0;
+        });
+
+        // --- Handle Preview Button Click ---
+        const previewButton = document.getElementById('preview-button');
+        const previewArea = document.getElementById('preview-area');
+        const statusMessage = document.getElementById('status-message');
+        const form = document.getElementById('upload-form');
+
+        previewButton.addEventListener('click', async () => {
+            statusMessage.textContent = 'Generating preview...';
+            previewArea.innerHTML = 'Generating...'; // Clear previous preview
+            
+            const formData = new FormData(form); // Get current form data
+            const fileInput = document.getElementById('file');
+
+            // We need to upload the file first if it hasn't been, or get its ID.
+            // This simple version assumes the file is selected and tries to preview.
+            if (!fileInput.files || fileInput.files.length === 0) {
+                statusMessage.textContent = 'Please select an FBX file first.';
+                previewArea.innerHTML = 'Preview will appear here';
+                return;
+            }
+
+            // Modify angle finding logic slightly for preview if auto-angles is checked?
+            // For preview, maybe just use 0 degrees if auto is checked?
+            if (autoAnglesCheckbox.checked) {
+                 previewAngle = 0; // Always preview angle 0 if auto-angles selected
+                 formData.set('preview_angle', previewAngle); // Ensure it's updated
+            } else {
+                 // Find the first selected angle
+                 const firstAngleCheckbox = form.querySelector('input[name="angles"]:checked');
+                 let previewAngle = 0; // Default
+                 if (firstAngleCheckbox) {
+                      previewAngle = firstAngleCheckbox.value;
+                 } else {
+                      // If no standard angle checked, check custom angle?
+                      const customEnabled = form.querySelector('input[name="custom_angle_enabled"]:checked');
+                      if (customEnabled) {
+                          const customValue = document.getElementById('custom_angle_value').value;
+                          if (customValue) {
+                               previewAngle = customValue; 
+                          } else {
+                              statusMessage.textContent = 'Please enter a value for the custom angle.';
+                              previewArea.innerHTML = 'Preview will appear here';
+                              return;
+                          }
+                      } else {
+                          statusMessage.textContent = 'Please select at least one angle.';
+                          previewArea.innerHTML = 'Preview will appear here';
+                          return;
+                      } 
+                 }
+                 formData.set('preview_angle', previewAngle);
+            }
+
+            try {
+                const response = await fetch('/preview', {
+                    method: 'POST',
+                    body: formData // Send the whole form data including the file
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Preview failed: ${response.status} ${errorText}`);
+                }
+
+                const result = await response.json();
+
+                if (result.success && result.preview_url) {
+                    previewArea.innerHTML = `<img src="${result.preview_url}?t=${new Date().getTime()}" alt="Render Preview" id="preview-image">`; // Add ID
+                    statusMessage.textContent = 'Preview generated. Click image to zoom.';
+                    
+                    // Add click listener to the new image for zooming
+                    const previewImage = document.getElementById('preview-image');
+                    if (previewImage) {
+                        previewImage.addEventListener('click', () => {
+                            previewImage.classList.toggle('zoomed');
+                        });
+                    }
+                } else {
+                    throw new Error(result.error || 'Preview generation failed on server.');
+                }
+
+            } catch (error) {
+                console.error('Preview Error:', error);
+                statusMessage.textContent = `Error: ${error.message}`;
+                previewArea.innerHTML = 'Preview Failed';
+            }
+        });
+
+        // --- Handle Final Processing Submission ---
+        // The form's default action is now correct for final processing
+        // We might want to prevent submission if no file is selected or angles etc.
+        form.addEventListener('submit', (event) => {
+             statusMessage.textContent = 'Starting full processing... This may take time.';
+             // Optional: Add validation here before submitting
+        });
+
+    </script>
+</body>
+</html> 
