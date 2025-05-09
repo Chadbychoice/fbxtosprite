@@ -88,16 +88,17 @@ def get_animation_world_bounds(obj, start_frame, end_frame):
         scene.frame_set(original_frame) # Ensure frame is reset on error
         return None, None
 
-def setup_scene(render_style, pixel_resolution=None):
-    """Clears the default scene and sets up basic render settings and lighting based on style."""
+def setup_scene(render_style, output_format, pixel_resolution=None):
+    """Clears the default scene, sets up render settings (incl. format, pixelation) and lighting."""
+    print(f"--- DEBUG (setup_scene): Received render_style = '{render_style}'") # Added Debug
     # Delete default objects
     bpy.ops.object.select_all(action='SELECT')
     if bpy.context.selected_objects:
         bpy.ops.object.delete(use_global=False)
     
     # --- Add Lighting (Conditional) ---
-    # Light needed for bright, cel, clay, AND pixel_cel
-    if render_style in ['bright', 'cel', 'clay', 'pixel_cel']:
+    # Light needed for bright, cel, clay, pixel_cel, cel_outline, cel_thicker_outline, pixel_outline
+    if render_style in ['bright', 'cel', 'clay', 'pixel_cel', 'cel_outline', 'cel_thicker_outline', 'pixel_outline', 'pixel_post_outline']:
         # Add a Sun light for clear directional lighting
         bpy.ops.object.light_add(type='SUN', location=(0, 0, 5))
         sun_light = bpy.context.object
@@ -105,6 +106,17 @@ def setup_scene(render_style, pixel_resolution=None):
         sun_light.rotation_euler = (math.radians(45), math.radians(-30), math.radians(45))
         sun_light.data.energy = 3.0 
         print(f"DEBUG: Added Sun light for style '{render_style}'")
+    # --- Blueprint: Set Background --- 
+    elif render_style == 'blueprint':
+        print("--- DEBUG (setup_scene): ENTERING BLUEPRINT BACKGROUND SETUP ---") # Added Debug
+        print("DEBUG: Setting blue world background for Blueprint style.")
+        bpy.context.scene.world.use_nodes = True
+        bg_node = bpy.context.scene.world.node_tree.nodes.get("Background")
+        if bg_node: 
+            bg_node.inputs['Color'].default_value = (0.05, 0.1, 0.3, 1.0) # Dark Blue
+            bg_node.inputs['Strength'].default_value = 1.0
+        else:
+            print("Warning: Could not find Background node to set blueprint color.")
     else: # 'unlit', 'original_unlit', 'wireframe'
         print(f"DEBUG: Skipping extra lighting for style '{render_style}'")
     # --- End Add Lighting ---
@@ -112,13 +124,11 @@ def setup_scene(render_style, pixel_resolution=None):
     # Set render settings
     scene = bpy.context.scene
     scene.render.engine = 'BLENDER_EEVEE_NEXT' # Use Eevee Next for Blender 4.x+
-    scene.render.image_settings.file_format = 'PNG'
-    scene.render.image_settings.color_mode = 'RGBA' # For transparency
     scene.render.film_transparent = True
     scene.render.resolution_percentage = 100
 
     # Set resolution based on style
-    if render_style == 'pixel_cel' and pixel_resolution:
+    if render_style in ['pixel_cel', 'pixel_outline', 'pixel_post_outline', 'pixel_post_thin_outline'] and pixel_resolution: # Apply low-res to all pixel styles
         target_res = int(pixel_resolution)
         print(f"DEBUG: Setting render resolution to {target_res}x{target_res} for pixelated style.")
         scene.render.resolution_x = target_res
@@ -128,71 +138,172 @@ def setup_scene(render_style, pixel_resolution=None):
         scene.render.resolution_x = 1024
         scene.render.resolution_y = 1024
     
+    # Set Output Format
+    if output_format == 'WEBP':
+        scene.render.image_settings.file_format = 'WEBP'
+        # Optional: Configure WebP settings (quality, lossless)
+        # scene.render.image_settings.quality = 90 
+        # scene.render.image_settings.webp_lossless = True 
+        print(f"DEBUG: Setting output format to WEBP")
+    else: # Default to PNG
+        scene.render.image_settings.file_format = 'PNG'
+        scene.render.image_settings.color_mode = 'RGBA' # Ensure RGBA for PNG
+        print(f"DEBUG: Setting output format to PNG")
+
+    # --- Freestyle Setup (Conditional) ---
+    if render_style == 'blueprint':
+        print("--- DEBUG (setup_scene): ENTERING BLUEPRINT FREESTYLE SETUP ---") # Added Debug
+        print("DEBUG: Enabling and configuring Freestyle for Blueprint style.")
+        scene.render.use_freestyle = True
+        freestyle_settings = scene.view_layers["ViewLayer"].freestyle_settings
+        # Try getting existing or add new
+        lineset = freestyle_settings.linesets.get("BlueprintLines")
+        if not lineset:
+            lineset = freestyle_settings.linesets.new("BlueprintLines")
+            
+        # Configure which lines to draw
+        lineset.select_silhouette = True
+        lineset.select_border = True
+        lineset.select_crease = True # Draw lines on sharp edges
+        lineset.select_edge_mark = False # Don't use manually marked edges for now
+        lineset.select_material_boundary = False
+        
+        # Configure line appearance
+        linestyle = lineset.linestyle
+        linestyle.color = (1.0, 1.0, 1.0) # White lines (RGB)
+        linestyle.alpha = 1.0 # Set alpha separately
+        linestyle.thickness = 1.5 # Adjust thickness as needed
+        # linestyle.use_alpha = False # Removed: Alpha controlled via color
+    else:
+         scene.render.use_freestyle = False # Ensure it's off for other styles
+    # --- End Freestyle Setup ---
+
     # Ensure compositor is disabled - we are not using it
     scene.use_nodes = False 
 
-def setup_camera(target_object, overall_min=None, overall_max=None):
-    """Creates and positions an orthographic camera based on overall animation bounds."""
+def setup_camera(target_object, angle_degrees, anim_min=None, anim_max=None):
+    """Creates and positions an orthographic camera rotated around the target object.
+       Uses overall animation bounds if provided, otherwise falls back to frame 1 bounds.
+    """
     print(f"DEBUG: Setting up camera for target: {target_object.name}")
     print(f"DEBUG: Target object initial world location: {target_object.location}")
     # print(f"DEBUG: Target object world matrix:\n{target_object.matrix_world}") # Can be verbose
 
-    # --- Calculate Center & Dimensions from Overall Bounds ---
-    if overall_min is not None and overall_max is not None:
-        world_center = (overall_min + overall_max) / 2.0
-        world_dims = overall_max - overall_min
-        print(f"DEBUG: Using OVERALL animation bounds for camera setup.")
-        print(f"DEBUG: Overall Center={world_center}, Overall Dims={world_dims}")
-    else:
-        # Fallback to single-frame bounds calculation if overall calculation failed
-        print("DEBUG: Using FALLBACK single-frame bounds for camera setup.")
-        world_dims = get_object_world_dimensions(target_object)
-        if world_dims:
-            world_center = target_object.matrix_world.translation # Approximate center
-        else:
-             # Absolute fallback
-             world_center = mathutils.Vector((0,0,0))
-             world_dims = mathutils.Vector((2,2,2)) # Default size
-             print("DEBUG: Critical fallback for camera setup.")
-    # --- End Calculate Center & Dimensions ---
+    # --- Determine Center and Dimensions (Animation Bounds or Frame 1 Fallback) ---
+    cam_world_center = mathutils.Vector((0.0, 0.0, 0.0))
+    cam_world_dims = mathutils.Vector((1.0, 1.0, 1.0)) # Default size
+    bounds_source = "Default"
 
-    # --- Create and Position Camera ---
-    # Position camera in front of the object center along the Y axis
-    # Keep Z aligned with the calculated center, adjust Y distance as needed
-    camera_location = (world_center.x, world_center.y - 5.0, world_center.z) # Adjust Y offset (-5) if needed
+    if anim_min and anim_max:
+        # Use provided animation bounds
+        cam_world_center = (anim_min + anim_max) / 2.0
+        cam_world_dims = anim_max - anim_min
+        bounds_source = "Animation Bounds"
+        print(f"DEBUG: Using provided Animation Bounds for camera setup.")
+        print(f"DEBUG: Animation Center: {cam_world_center}")
+        print(f"DEBUG: Animation Dimensions: {cam_world_dims}")
+    else:
+        # Fallback to Frame 1 bounds
+        print("DEBUG: No animation bounds provided or calc failed. Falling back to Frame 1 bounds.")
+        bounds_source = "Frame 1"
+        try:
+            scene = bpy.context.scene
+            original_frame = scene.frame_current
+            scene.frame_set(1) 
+            
+            frame1_world_dims = get_object_world_dimensions(target_object)
+            if frame1_world_dims:
+                frame1_bbox_corners = [(target_object.matrix_world @ mathutils.Vector(corner)) for corner in target_object.bound_box]
+                if frame1_bbox_corners:
+                    min_coord = mathutils.Vector((min(v[i] for v in frame1_bbox_corners) for i in range(3)))
+                    max_coord = mathutils.Vector((max(v[i] for v in frame1_bbox_corners) for i in range(3)))
+                    cam_world_center = (min_coord + max_coord) / 2.0
+                    cam_world_dims = frame1_world_dims # Use calculated dims
+                    print(f"DEBUG: Calculated Frame 1 Center: {cam_world_center}")
+                    print(f"DEBUG: Calculated Frame 1 Dimensions: {cam_world_dims}")
+                else:
+                     print("DEBUG: Could not get Frame 1 corners, using object origin/default dims.")
+                     cam_world_center = target_object.matrix_world.translation
+                     cam_world_dims = mathutils.Vector((2,2,2))
+            else:
+                 print("DEBUG: Could not get Frame 1 dims, using object origin/default dims.")
+                 cam_world_center = target_object.matrix_world.translation
+                 cam_world_dims = mathutils.Vector((2,2,2))
+                 
+            scene.frame_set(original_frame)
+        except Exception as e_fc:
+             print(f"Error getting Frame 1 center/dims: {e_fc}. Using object origin/default dims.")
+             cam_world_center = target_object.matrix_world.translation # Fallback
+             cam_world_dims = mathutils.Vector((2,2,2))
+    # --- End Determine Center & Dimensions ---
+
+    # --- Determine Orthographic Scale (Using selected bounds: cam_world_dims) ---
+    calculated_ortho_scale = 5.0 # Default fallback scale
+    try:
+        if cam_world_dims and cam_world_dims.length > 0.001: 
+            scene = bpy.context.scene
+            aspect_ratio = scene.render.resolution_x / scene.render.resolution_y
+            padding_multiplier = 2.2 # Keep increased padding
+
+            max_world_dim = max(cam_world_dims.x, cam_world_dims.y, cam_world_dims.z)
+
+            base_scale = max_world_dim / 2.0
+            if aspect_ratio < 1.0: 
+                 scale_factor = 1.0 / aspect_ratio
+                 base_scale *= scale_factor
+            calculated_ortho_scale = base_scale * padding_multiplier
+
+            print(f"DEBUG: Max World Dim ({bounds_source}): {max_world_dim:.4f}")
+            print(f"DEBUG: Aspect Ratio: {aspect_ratio:.4f}")
+
+            if calculated_ortho_scale < 0.01:
+                print(f"Warning: Calculated ortho_scale ({calculated_ortho_scale}) from {bounds_source} is very small, clamping to 0.1.")
+                calculated_ortho_scale = 0.1
+            print(f"DEBUG: Determined final ortho_scale from {bounds_source}: {calculated_ortho_scale:.4f}")
+        else:
+             print(f"Warning: Could not calculate valid {bounds_source} dimensions for scale. Using default ortho_scale 5.")
+             # calculated_ortho_scale remains 5.0
+
+    except ZeroDivisionError:
+        print("Error: Render resolution Y is zero, cannot calculate aspect ratio. Using default scale 5.")
+        # calculated_ortho_scale remains 5.0
+    except Exception as e:
+        print(f"Error calculating ortho_scale from {bounds_source} dims: {e}. Using default 5.")
+        # calculated_ortho_scale remains 5.0
+    # --- End Determine Orthographic Scale ---
+
+    # --- Create and Position Camera (Relative to Calculated Center: cam_world_center) ---
+    camera_distance_multiplier = 2.5 
+    camera_y_offset = calculated_ortho_scale * camera_distance_multiplier
+    min_camera_distance = 1.0 
+    effective_camera_distance = max(min_camera_distance, camera_y_offset)
+    
+    initial_offset = mathutils.Vector((0, -effective_camera_distance, 0))
+    radians = math.radians(angle_degrees)
+    rot_matrix = mathutils.Matrix.Rotation(radians, 4, 'Z')
+    rotated_offset = rot_matrix @ initial_offset
+    
+    # Calculate final camera location relative to the determined world center
+    camera_location = cam_world_center + rotated_offset 
+    print(f"DEBUG: Setting camera angle={angle_degrees} deg, location={camera_location} (relative to {bounds_source} center)")
+
     bpy.ops.object.camera_add(location=camera_location)
     camera_obj = bpy.context.object
     camera = camera_obj.data
     camera.name = "SpriteRenderCam"
     camera.type = 'ORTHO'
-    print(f"DEBUG: Camera created at location: {camera_location}")
+    camera.ortho_scale = calculated_ortho_scale 
 
-    # --- Point Camera --- 
-    # Point the camera directly towards the calculated world center
-    direction = world_center - camera_obj.location
-    # Point Z axis up, Y axis forward (standard camera orientation)
+    # --- Point Camera (Towards Calculated Center: cam_world_center) --- 
+    camera_target_point = cam_world_center 
+    print(f"DEBUG: Using {bounds_source} center for camera target: {camera_target_point}")
+
+    # Calculate direction from camera location to the target point
+    direction = camera_target_point - camera_obj.location 
     rot_quat = direction.to_track_quat('-Z', 'Y')
     camera_obj.rotation_euler = rot_quat.to_euler()
-    print(f"DEBUG: Camera rotation set to look at {world_center}")
+    print(f"DEBUG: Camera rotation set to look at {bounds_source} target: {camera_target_point}")
     # --- End Point Camera ---
-
-    # --- Dynamic Orthographic Scale (using Overall Dimensions) ---
-    try:
-        if world_dims and max(world_dims.x, world_dims.z) > 0.001:
-            # Use max of X and Z dimensions from OVERALL bounds
-            ortho_scale = max(world_dims.x, world_dims.z) * 1.1 # Add 10% padding
-            if ortho_scale < 0.1:
-                print(f"Warning: Calculated overall ortho_scale ({ortho_scale}) too small, using fallback.")
-                ortho_scale = 1
-            camera.ortho_scale = ortho_scale
-            print(f"DEBUG: Setting ortho_scale based on overall dims (X, Z): {ortho_scale}")
-        else:
-             print("Warning: Could not calculate valid overall dimensions for scale. Using default ortho_scale.")
-             camera.ortho_scale = 5 # Default
-    except Exception as e:
-        print(f"Error calculating overall dimensions/ortho_scale: {e}. Using default.")
-        camera.ortho_scale = 5 # Default
-    # --- End Dynamic Scale ---
 
     bpy.context.scene.camera = camera_obj
     return camera_obj
@@ -390,9 +501,70 @@ def apply_clay_material(material):
     links.new(diffuse_node.outputs['BSDF'], output_node.inputs['Surface'])
     print(f"DEBUG: Clay material applied to {material.name}")
 
-def render_animation(fbx_path, output_dir, output_name, num_frames_to_render, angle_degrees, render_style, pixel_resolution=None):
-    """Imports FBX, sets up scene/camera based on style, and renders animation frames."""
-    setup_scene(render_style, pixel_resolution)
+def create_outline_material():
+    """Creates a black, shadeless material for the inverted hull outline."""
+    mat_name = "OutlineMaterial"
+    outline_mat = bpy.data.materials.get(mat_name)
+    if outline_mat is None:
+        outline_mat = bpy.data.materials.new(name=mat_name)
+        outline_mat.use_nodes = True
+        nodes = outline_mat.node_tree.nodes
+        links = outline_mat.node_tree.links
+        for node in nodes: nodes.remove(node) # Clear default nodes
+
+        output_node = nodes.new(type='ShaderNodeOutputMaterial')
+        emission_node = nodes.new(type='ShaderNodeEmission')
+        emission_node.inputs['Color'].default_value = (0.0, 0.0, 0.0, 1.0) # Black
+        emission_node.inputs['Strength'].default_value = 1.0
+        emission_node.location = (-200, 0)
+        links.new(emission_node.outputs['Emission'], output_node.inputs['Surface'])
+        
+        outline_mat.use_backface_culling = True # Crucial for outline effect
+        print("DEBUG: Created Outline material.")
+    return outline_mat
+
+def apply_outline_modifier(obj, outline_material, thickness=-0.005):
+    """Adds and configures a Solidify modifier for the inverted hull outline.
+       Accepts an optional thickness parameter.
+    """
+    if obj.type != 'MESH':
+        print(f"DEBUG: Skipping outline modifier for non-mesh object: {obj.name}")
+        return
+    
+    print(f"DEBUG: Applying outline modifier to mesh object: {obj.name}")
+    
+    # Add new material slot if needed and assign outline material
+    if outline_material.name not in obj.material_slots:
+        obj.data.materials.append(outline_material)
+        print(f"DEBUG: Added outline material slot to {obj.name}")
+    else:
+        print(f"DEBUG: Outline material slot already exists on {obj.name}")
+    outline_slot_index = obj.material_slots.find(outline_material.name)
+    if outline_slot_index == -1:
+        print(f"ERROR: Could not find outline material slot index on {obj.name} after adding it!")
+        return # Should not happen
+    
+    # Add Solidify Modifier
+    mod_name = "OutlineSolidify"
+    solidify_mod = obj.modifiers.get(mod_name)
+    if not solidify_mod:
+        solidify_mod = obj.modifiers.new(name=mod_name, type='SOLIDIFY')
+        print(f"DEBUG: Added Solidify modifier to {obj.name}")
+    else:
+        print(f"DEBUG: Solidify modifier already exists on {obj.name}")
+        
+    # Configure Solidify Modifier
+    solidify_mod.thickness = thickness # Use passed thickness value
+    solidify_mod.offset = 0 
+    solidify_mod.use_flip_normals = True 
+    solidify_mod.material_offset = outline_slot_index 
+    solidify_mod.use_rim = False 
+    print(f"DEBUG: Configured Solidify modifier for {obj.name} with thickness {thickness}")
+
+def render_animation(fbx_path, output_dir, output_name, num_frames_to_render, angle_degrees, render_style, output_format, pixel_resolution=None):
+    """Imports FBX, sets up scene/camera/style/format, and renders animation frames."""
+    print(f"--- DEBUG (render_animation): Received render_style = '{render_style}'") # Added Debug
+    setup_scene(render_style, output_format, pixel_resolution)
 
     try:
         bpy.ops.import_scene.fbx(filepath=fbx_path)
@@ -416,36 +588,11 @@ def render_animation(fbx_path, output_dir, output_name, num_frames_to_render, an
     bpy.context.view_layer.objects.active = imported_object
     imported_object.select_set(True)
 
-    # --- Calculate Animation Bounds BEFORE Setting Up Camera ---
-    overall_min_coord, overall_max_coord = None, None
-    start_frame, end_frame = 1, 1 # Defaults
-    if imported_object:
-        if imported_object.animation_data and imported_object.animation_data.action:
-            action = imported_object.animation_data.action
-            start_frame = int(action.frame_range[0])
-            end_frame = int(action.frame_range[1])
-            print(f"Found animation: '{action.name}'. Frames: {start_frame} to {end_frame}")
-            # Calculate overall bounds
-            overall_min_coord, overall_max_coord = get_animation_world_bounds(imported_object, start_frame, end_frame)
-        else:
-            print("Warning: No animation data found. Camera bounds based on single frame.")
-            # Fallback bounds calculation can happen inside setup_camera
-    # --- End Calculate Animation Bounds ---
-
-    # --- Apply Rotation ---
-    if imported_object:
-        print(f"Applying rotation: {angle_degrees} degrees around Z-axis")
-        radians = math.radians(angle_degrees)
-        imported_object.rotation_euler[2] += radians # Add to existing Z rotation
-    # --- End Apply Rotation ---
-
-    # Setup camera targeting the imported object, passing overall bounds
-    setup_camera(imported_object, overall_min_coord, overall_max_coord)
-
-    # Find animation range
+    # --- Get Animation Range ---
     scene = bpy.context.scene
     start_frame = 1
     end_frame = 1
+    action = None
     if imported_object.animation_data and imported_object.animation_data.action:
         action = imported_object.animation_data.action
         start_frame = int(action.frame_range[0])
@@ -454,9 +601,25 @@ def render_animation(fbx_path, output_dir, output_name, num_frames_to_render, an
         scene.frame_end = end_frame
         print(f"Found animation: '{action.name}'. Frames: {start_frame} to {end_frame}")
     else:
-        print("Warning: No animation data found on the primary object. Rendering frame 1 only.")
+        print("Warning: No animation data found on the primary object. Will use frame 1 bounds.")
+    # --- End Get Animation Range ---
+    
+    # --- Calculate Overall Animation Bounds (if animation exists) ---
+    overall_min = None
+    overall_max = None
+    if action and end_frame > start_frame: # Only calculate if there's an animation > 1 frame
+        print("Attempting to calculate overall animation bounds...")
+        overall_min, overall_max = get_animation_world_bounds(imported_object, start_frame, end_frame)
+        if overall_min and overall_max:
+             print(f"Successfully calculated animation bounds: Min={overall_min}, Max={overall_max}")
+        else:
+             print("Failed to calculate overall animation bounds, will fall back to frame 1.")
+    # --- End Calculate Overall Animation Bounds ---
 
-    # Determine frames to render
+    # Setup camera targeting the imported object, passing angle and optional animation bounds
+    setup_camera(imported_object, angle_degrees, anim_min=overall_min, anim_max=overall_max)
+
+    # Determine frames to render (Original logic moved after camera setup)
     frames_to_render = []
     total_source_frames = end_frame - start_frame + 1
 
@@ -478,58 +641,178 @@ def render_animation(fbx_path, output_dir, output_name, num_frames_to_render, an
         frames_to_render = sorted(list(set(frames_to_render)))
         print(f"Frames to render: {frames_to_render}")
 
-    # --- Apply Shader based on Style ---
+    # --- Create Outline Material (if needed) ---
+    outline_material_instance = None
+    if render_style in ['cel_outline', 'cel_thicker_outline', 'pixel_outline']: # Add pixel_outline
+        outline_material_instance = create_outline_material()
+    # --- End Create Outline Material ---
+    
+    # --- Apply Shaders / Modifiers based on Style ---
     if imported_object:
-        print(f"DEBUG: Processing materials for object: {imported_object.name} with style '{render_style}'")
-        materials_to_process = set()
-        objects_to_check = [imported_object] + list(imported_object.children)
-        for obj in objects_to_check:
-            if hasattr(obj, 'material_slots'):
-                for slot in obj.material_slots:
-                    if slot.material: materials_to_process.add(slot.material)
-        
-        if not materials_to_process:
-             print("DEBUG: No materials found.")
-        else:
-             print(f"DEBUG: Found materials: {[m.name for m in materials_to_process]}")
-             for mat in materials_to_process:
-                  # Note: 'cel' and 'unlit' calls are swapped based on user feedback
-                  if render_style == 'cel': 
-                      apply_unlit_shader_nodes(mat)
-                      print(f"DEBUG: Applying UNLIT (Emission) nodes for selected style 'cel' to {mat.name}")
+        print(f"DEBUG: Processing materials/modifiers for object: {imported_object.name} with style '{render_style}'")
+        objects_to_process = [imported_object] # Start with main object
+        # If main object is Armature or Empty, process its children instead/as well
+        if imported_object.type in ['ARMATURE', 'EMPTY']:
+             objects_to_process.extend(child for child in imported_object.children if child.type == 'MESH')
+        elif imported_object.type != 'MESH': # If main is not mesh/armature/empty, skip? 
+             objects_to_process = [] # Safety
+             print(f"WARNING: Imported object {imported_object.name} is not Mesh/Armature/Empty, shader/modifier application might be limited.")
+             # Only process mesh children if main object isn't a mesh itself
+             objects_to_process.extend(child for child in imported_object.children if child.type == 'MESH') 
+
+        # Remove duplicates and ensure we only process MESH objects for modifiers/materials
+        mesh_objects_to_process = list({obj for obj in objects_to_process if obj.type == 'MESH'})
+        print(f"DEBUG: Found MESH objects to process: {[obj.name for obj in mesh_objects_to_process]}")
+
+        # Process Materials FIRST (unless clay/wireframe)
+        if render_style not in ['clay', 'wireframe']:
+            all_materials = set()
+            for obj in mesh_objects_to_process:
+                for slot in obj.material_slots: 
+                    if slot.material: all_materials.add(slot.material)
+            
+            print(f"DEBUG: Found materials for style '{render_style}': {[m.name for m in all_materials]}")
+            for mat in all_materials:
+                  # --- Restore original material-based style logic ---
+                  if render_style in ['cel', 'cel_outline', 'cel_thicker_outline']:
+                      # For outline styles, we want unlit original colors + an outline modifier later
+                      apply_unlit_shader_nodes(mat) 
+                      print(f"DEBUG: Applying UNLIT (Emission) nodes for selected style '{render_style}' to {mat.name}")
                   elif render_style == 'unlit':
-                      apply_toon_bsdf_nodes(mat)
-                      print(f"DEBUG: Applying TOON BSDF nodes for selected style 'unlit' to {mat.name}")
-                  elif render_style == 'wireframe':
-                      apply_wireframe_material(mat)
-                  elif render_style == 'clay':
-                      apply_clay_material(mat)
+                      # For plain unlit, we apply unlit shader nodes
+                      apply_unlit_shader_nodes(mat)
+                      print(f"DEBUG: Applying UNLIT (Emission) nodes for selected style '{render_style}' to {mat.name}")
+                      # apply_toon_bsdf_nodes(mat) # This was likely incorrect for 'unlit'
                   elif render_style == 'original_unlit':
+                      # Leave material as is (it's already unlit if imported correctly)
                       print(f"DEBUG: Using original material for 'original_unlit' style for {mat.name}")
-                  elif render_style == 'pixel_cel':
-                      # Use the same node logic as 'cel' (which is currently apply_unlit_shader_nodes)
-                      apply_unlit_shader_nodes(mat) # RESTORED this call
-                      print(f"DEBUG: Applying UNLIT (Emission) nodes for selected style 'pixel_cel' to {mat.name}")
-                  # else 'bright': do nothing
-                  
-    # --- End Apply Shader ---
+                  elif render_style in ['pixel_cel', 'pixel_outline', 'pixel_post_outline', 'pixel_post_thin_outline']:
+                      # Treat pixel_post_outline and pixel_post_thin_outline the same as pixel_cel for Blender
+                      if render_style in ['pixel_post_outline', 'pixel_post_thin_outline']:
+                          print(f"DEBUG: Treating '{render_style}' as 'pixel_cel' for Blender rendering.")
+                      # Use unlit for pixelated base colors
+                      apply_unlit_shader_nodes(mat)
+                      print(f"DEBUG: Applying UNLIT (Emission) nodes for selected style '{render_style}' to {mat.name}")
+                  # --- Blueprint Material Handling (Correct Location) ---
+                  elif render_style == 'blueprint':
+                      print(f"--- DEBUG (render_animation): ENTERING BLUEPRINT MATERIAL SETUP for {mat.name} ---") # Added Debug
+                      apply_unlit_shader_nodes(mat) # Apply base unlit setup first
+                      # Explicitly set emission color to white
+                      try:
+                          emission_node = mat.node_tree.nodes.get("Emission")
+                          if emission_node and 'Color' in emission_node.inputs:
+                              emission_node.inputs['Color'].default_value = (1.0, 1.0, 1.0, 1.0) # White
+                              print(f"DEBUG: Set Blueprint emission color to WHITE for {mat.name}")
+                          else:
+                              print(f"Warning: Could not find Emission node or Color input for Blueprint style on {mat.name}")
+                      except Exception as e_bp_mat:
+                          print(f"Warning: Error setting Blueprint emission color for {mat.name}: {e_bp_mat}")
+                  # ---------------------------------------------------
+                  elif render_style == 'halftone': # Placeholder
+                      apply_halftone_dots_nodes(mat)
+                      print(f"DEBUG: Applying HALFTONE placeholder to {mat.name}")
+                  elif render_style == 'hatched': # Placeholder
+                       apply_toon_bsdf_nodes(mat) # Use Toon as base
+                       print(f"DEBUG: Applying HATCHED placeholder (Toon) to {mat.name}")
+                  elif render_style == 'glitch': # Placeholder
+                       apply_unlit_shader_nodes(mat) # Unlit base
+                       print(f"DEBUG: Applying GLITCH placeholder (Unlit) to {mat.name}")
+                  elif render_style == 'ascii_art': # Placeholder
+                       apply_high_contrast_nodes(mat)
+                       print(f"DEBUG: Applying ASCII_ART placeholder (High Contrast) to {mat.name}")
+                  # else 'bright': do nothing to material nodes here, lighting is handled
+
+        # Process Modifiers / Full Material Overrides (Clay, Wireframe, Outlines)
+        for obj in mesh_objects_to_process:
+             if render_style == 'cel_outline' and outline_material_instance:
+                  apply_outline_modifier(obj, outline_material_instance) # Default thickness
+             elif render_style == 'cel_thicker_outline' and outline_material_instance:
+                  apply_outline_modifier(obj, outline_material_instance, thickness=-0.015)
+             elif render_style == 'pixel_outline' and outline_material_instance:
+                  apply_outline_modifier(obj, outline_material_instance, thickness=-0.015) # Use thicker outline for pixel style too
+             elif render_style == 'clay':
+                  # Clay needs to replace existing materials on the object
+                  if obj.material_slots:
+                      clay_mat = bpy.data.materials.get("ClayMaterial")
+                      if clay_mat is None: # Create if doesn't exist
+                          clay_mat = bpy.data.materials.new(name="ClayMaterial")
+                          apply_clay_material(clay_mat) # This clears nodes and adds diffuse
+                      for slot in obj.material_slots:
+                          slot.material = clay_mat
+                      print(f"DEBUG: Applied clay material override to {obj.name}")
+                  else: print(f"DEBUG: No material slots on {obj.name} to apply clay override.")
+             elif render_style == 'wireframe':
+                  # Wireframe needs to replace existing materials
+                  if obj.material_slots:
+                      wire_mat = bpy.data.materials.get("WireframeMaterial")
+                      if wire_mat is None: # Create if doesn't exist
+                          wire_mat = bpy.data.materials.new(name="WireframeMaterial")
+                          apply_wireframe_material(wire_mat) # This clears nodes and adds wireframe setup
+                      for slot in obj.material_slots:
+                          slot.material = wire_mat
+                      print(f"DEBUG: Applied wireframe material override to {obj.name}")
+                  else: print(f"DEBUG: No material slots on {obj.name} to apply wireframe override.")
+             # Placeholder logic for object-specific parts of new styles (if any)
+             elif render_style == 'halftone': pass
+             elif render_style == 'hatched': pass
+             elif render_style == 'glitch': pass
+             elif render_style == 'ascii_art': pass
+             # Fallback/Unknown
+             else:
+                  print(f"Warning: Unknown or default render style '{render_style}'. Using default Bright lighting.")
+                  # Default behavior (bright lighting) is already handled by add_sun_light()
+
+    # --- End Apply Shader / Modifiers ---
+    
+    # Determine file extension
+    file_extension = output_format.lower()
     
     # Render the selected frames
-    print(f"Rendering {len(frames_to_render)} frames to {output_dir} with base name {output_name}...")
+    print(f"Rendering {len(frames_to_render)} frames to {output_dir} with base name {output_name} (Format: {output_format})...")
     frame_index = 0
     for frame in frames_to_render:
         scene.frame_set(frame)
-        # Use a consistent index for output filenames, not the actual frame number
-        output_file_path = os.path.join(output_dir, f"{output_name}_{frame_index:04d}.png")
+        # Set filepath WITHOUT extension (Blender adds it based on format)
+        frame_filename_base = f"{output_name}_{frame_index:04d}"
+        scene.render.filepath = os.path.join(output_dir, frame_filename_base)
+        
+        print(f"--- DEBUG (render_animation): Rendering frame {frame_index} to base path: {scene.render.filepath} with format {scene.render.image_settings.file_format} ---") # Added Debug
+        
+        # Render the frame
+        bpy.ops.render.render(write_still=True)
+        
+        # --- Verify file existence --- 
+        expected_filepath = f"{scene.render.filepath}.{file_extension}"
+        if os.path.exists(expected_filepath):
+            print(f"DEBUG (render_animation): Verified file exists at: {expected_filepath}")
+        else:
+            print(f"ERROR (render_animation): File NOT found after render at expected path: {expected_filepath}")
+        # ---------------------------
+            
+        print(f"DEBUG (render_animation): Frame {frame_index} render complete.")
         frame_index += 1
-        scene.render.filepath = output_file_path
-        try:
-            bpy.ops.render.render(write_still=True)
-            print(f"Rendered source frame {frame} to {output_file_path}")
-        except Exception as e:
-             print(f"Error rendering frame {frame}: {e}")
 
     print("Rendering finished.")
+
+# --- Placeholder Functions for New Styles --- 
+def apply_halftone_dots_nodes(material):
+    """Placeholder: Modifies material nodes for halftone effect."""
+    print(f"Placeholder: Applying Halftone Dots nodes to {material.name}")
+    # TODO: Implement actual halftone node setup (e.g., using Voronoi or OSL)
+    apply_unlit_shader_nodes(material) # Fallback to unlit for now
+
+def apply_high_contrast_nodes(material):
+    """Placeholder: Modifies material for high-contrast B&W output (for ASCII)."""
+    print(f"Placeholder: Applying High Contrast nodes to {material.name}")
+    # TODO: Implement B&W thresholding node setup
+    apply_unlit_shader_nodes(material) # Fallback to unlit for now
+    # Set emission color to white temporarily
+    try:
+        emission_node = material.node_tree.nodes.get("Emission")
+        if emission_node: 
+            emission_node.inputs['Color'].default_value = (1.0, 1.0, 1.0, 1.0) 
+    except Exception:
+        pass # Ignore if nodes don't exist as expected
 
 if __name__ == "__main__":
     # Blender scripts need to parse args after '--'
@@ -546,9 +829,11 @@ if __name__ == "__main__":
     parser.add_argument("--num_frames", type=int, default=16, help="Number of frames to render for the sprite sheet (default: 16)")
     parser.add_argument("--angle", type=float, default=0.0, help="Viewing angle rotation around Z-axis in degrees (default: 0)")
     parser.add_argument("--render_style", default='bright', 
-                        choices=['bright', 'cel', 'unlit', 'original_unlit', 'wireframe', 'clay', 'pixel_cel'],
+                        choices=['bright', 'cel', 'unlit', 'original_unlit', 'wireframe', 'clay', 'pixel_cel', 'cel_outline', 'cel_thicker_outline', 'pixel_outline', 'pixel_post_outline', 'pixel_post_thin_outline', 'blueprint', 'halftone', 'hatched', 'glitch', 'ascii_art'],
                         help="Rendering style (default: bright)")
-    parser.add_argument("--pixel_resolution", type=int, default=None, 
+    parser.add_argument("--output_format", default='PNG', choices=['PNG', 'WEBP'], 
+                        help="Output image format (default: PNG)")
+    parser.add_argument("--pixel_resolution", type=int, default=None,
                         help="Target resolution for pixelated style (e.g., 128)")
 
     args = parser.parse_args(argv)
@@ -556,4 +841,4 @@ if __name__ == "__main__":
     # Ensure output directory exists
     os.makedirs(args.output_dir, exist_ok=True)
 
-    render_animation(args.input, args.output_dir, args.output_name, args.num_frames, args.angle, args.render_style, args.pixel_resolution) 
+    render_animation(args.input, args.output_dir, args.output_name, args.num_frames, args.angle, args.render_style, args.output_format, args.pixel_resolution) 

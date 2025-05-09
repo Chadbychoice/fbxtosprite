@@ -126,16 +126,45 @@
                     <option value="clay">Clay Render</option>
                     <option value="wireframe">Wireframe</option>
                     <option value="pixel_cel">Pixelated Cel</option>
+                    <option value="cel_outline">Cel Shaded (Black Outline)</option>
+                    <option value="cel_thicker_outline">Cel Shaded (Thicker Outline)</option>
+                    <option value="pixel_outline">Pixelated (Thick Outline)</option>
+                    <option value="pixel_post_outline">Pixelated (Post Outline)</option>
+                    <option value="pixel_post_thin_outline">Pixelated (thin post outline)</option>
+                    <!-- Radical Styles -->
+                    <option value="blueprint">Blueprint</option>
+                    <option value="halftone">Halftone Dots</option>
+                    <option value="hatched">Hatched Shading</option>
+                    <option value="glitch">Glitch Art</option>
+                    <option value="ascii_art">ASCII Art</option>
                 </select>
             </div>
 
-            <!-- Add Auto-Angles Checkbox -->
             <div class="form-group">
-                 <label style="display: inline-block; margin-right: 10px;">
-                    <input type="checkbox" name="auto_angles" id="auto_angles_checkbox" value="true">
-                    Render 8 Angles (for Stationary Models)
-                 </label>
-                 <span style="font-size: 0.9em; color: #666;">(Disables angle/frame count selection)</span>
+                <label for="output_format">Image Format (for Frames/Sheets):</label>
+                <select name="output_format" id="output_format">
+                    <option value="PNG" selected>PNG (Lossless)</option>
+                    <option value="WEBP">WebP (Lossy/Lossless)</option> 
+                    <!-- Add JPEG, etc. later if needed -->
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Output Type:</label>
+                <label><input type="radio" name="output_type" value="zip" checked> Individual Frames (Zip)</label>
+                <label><input type="radio" name="output_type" value="sheet"> Sprite Sheet (PNG per Angle)</label>
+            </div>
+
+            <!-- Auto-Angles Radio Buttons -->
+            <div class="form-group">
+                <label>Auto-Angles (for Stationary Models):</label>
+                <div>
+                    <label style="margin-right: 1em;"><input type="radio" name="auto_angles_mode" value="off" checked> Off (Manual Selection)</label>
+                    <label style="margin-right: 1em;"><input type="radio" name="auto_angles_mode" value="16"> 16 Angles</label>
+                    <label style="margin-right: 1em;"><input type="radio" name="auto_angles_mode" value="32"> 32 Angles</label>
+                    <label style="margin-right: 1em;"><input type="radio" name="auto_angles_mode" value="64"> 64 Angles</label>
+                </div>
+                 <span style="font-size: 0.9em; color: #666;">(Disables angle/frame count selection when 16, 32, or 64 is chosen)</span>
             </div>
 
             <!-- Add Pixelation Resolution Input -->
@@ -144,17 +173,25 @@
                  <input type="number" name="pixel_resolution" id="pixel_resolution" value="128" min="16" max="256" step="1">
             </div>
 
-            <fieldset class="angle-options">
+            <fieldset class="angle-options" id="angle-options">
                  <legend>4. Select Viewing Angles:</legend>
                  <label><input type="checkbox" name="angles" value="0" checked> 0°</label>
+                 <label><input type="checkbox" name="angles" value="22.5"> 22.5°</label>
                  <label><input type="checkbox" name="angles" value="45"> 45°</label>
+                 <label><input type="checkbox" name="angles" value="67.5"> 67.5°</label>
                  <label><input type="checkbox" name="angles" value="90"> 90°</label>
+                 <label><input type="checkbox" name="angles" value="112.5"> 112.5°</label>
                  <label><input type="checkbox" name="angles" value="135"> 135°</label>
+                 <label><input type="checkbox" name="angles" value="157.5"> 157.5°</label>
                  <label><input type="checkbox" name="angles" value="180"> 180°</label>
+                 <label><input type="checkbox" name="angles" value="202.5"> 202.5°</label>
                  <label><input type="checkbox" name="angles" value="225"> 225°</label>
+                 <label><input type="checkbox" name="angles" value="247.5"> 247.5°</label>
                  <label><input type="checkbox" name="angles" value="270"> 270°</label>
+                 <label><input type="checkbox" name="angles" value="292.5"> 292.5°</label>
                  <label><input type="checkbox" name="angles" value="315"> 315°</label>
-                 
+                 <label><input type="checkbox" name="angles" value="337.5"> 337.5°</label>
+
                  <div class="custom-angle-group">
                     <label for="custom_angle_value">
                          <input type="checkbox" name="custom_angle_enabled" value="true"> Custom Angle:
@@ -188,26 +225,28 @@
 
         const renderStyleSelect = document.getElementById('render_style');
         const pixelGroup = document.getElementById('pixel-resolution-group');
-        const autoAnglesCheckbox = document.getElementById('auto_angles_checkbox');
+        const autoAnglesRadios = document.querySelectorAll('input[name="auto_angles_mode"]');
         const angleOptions = document.querySelector('.angle-options');
         const numFramesInput = document.getElementById('num_frames');
 
         // Show/hide pixel resolution input based on style selection
         renderStyleSelect.addEventListener('change', function() {
-            if (this.value === 'pixel_cel') {
+            if (this.value === 'pixel_cel' || this.value === 'pixel_outline' || this.value === 'pixel_post_outline' || this.value === 'pixel_post_thin_outline') { // Check for all pixel styles
                 pixelGroup.style.display = 'block';
             } else {
                 pixelGroup.style.display = 'none';
             }
         });
-        // Initial check in case the page loads with it selected (unlikely but safe)
-        if (renderStyleSelect.value === 'pixel_cel') {
+        // Initial check in case the page loads with it selected
+        if (renderStyleSelect.value === 'pixel_cel' || renderStyleSelect.value === 'pixel_outline' || renderStyleSelect.value === 'pixel_post_outline' || renderStyleSelect.value === 'pixel_post_thin_outline') { // Check for all pixel styles
              pixelGroup.style.display = 'block';
         }
 
-        // Enable/disable angle/frame inputs based on auto-angles checkbox
-        autoAnglesCheckbox.addEventListener('change', function() {
-            const disableInputs = this.checked;
+        // Enable/disable angle/frame inputs based on auto-angles radio buttons
+        function updateAngleInputState() {
+            const selectedMode = document.querySelector('input[name="auto_angles_mode"]:checked').value;
+            const disableInputs = (selectedMode !== 'off');
+
             // Disable angle fieldset contents
             const angleInputs = angleOptions.querySelectorAll('input');
             angleInputs.forEach(input => input.disabled = disableInputs);
@@ -216,7 +255,14 @@
             // Optional: Visual cue
             angleOptions.style.opacity = disableInputs ? 0.5 : 1.0;
             numFramesInput.parentElement.style.opacity = disableInputs ? 0.5 : 1.0;
+        }
+
+        autoAnglesRadios.forEach(radio => {
+            radio.addEventListener('change', updateAngleInputState);
         });
+
+        // Initial check on page load
+        updateAngleInputState();
 
         // --- Handle Preview Button Click ---
         const previewButton = document.getElementById('preview-button');
@@ -241,7 +287,9 @@
 
             // Modify angle finding logic slightly for preview if auto-angles is checked?
             // For preview, maybe just use 0 degrees if auto is checked?
-            if (autoAnglesCheckbox.checked) {
+            // Check the selected auto-angle mode
+            const selectedAutoMode = document.querySelector('input[name="auto_angles_mode"]:checked').value;
+            if (selectedAutoMode !== 'off') {
                  previewAngle = 0; // Always preview angle 0 if auto-angles selected
                  formData.set('preview_angle', previewAngle); // Ensure it's updated
             } else {

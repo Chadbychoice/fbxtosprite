@@ -1,25 +1,29 @@
-# Python general
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Flask / Werkzeug temp files
+*.wsgicache
+*.sess
 
 # Virtual environment
+.venv/
 venv/
-*/venv/
-*/env/
 env/
-*/.env
-.env
+ENV/
+pip-selfcheck.json
 
-# Flask specific
-instance/
-.webassets-cache/
-
-# Application specific
+# Application-specific (FBX to Sprite)
 uploads/
 output/
 
-# IDE / Editor specific
+# IDE specific (optional)
 .vscode/
 .idea/
-*.swp 
+*.swp
+*.swo 
